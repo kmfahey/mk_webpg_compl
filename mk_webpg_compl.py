@@ -13,7 +13,7 @@ import tempfile
 import io
 
 from re import Pattern
-from typing import BinaryIO
+from typing import BinaryIO, Dict, Type
 
 from bs4 import Tag, NavigableString
 from requests import Response
@@ -102,6 +102,17 @@ status_code_msgs: dict[int, str] = {
     525: "SSL Handshake Failed",
     530: "Site Frozen",
     599: "Network Connect Timeout Error",
+}
+
+req_excpt_msgs: dict[Type[OSError], str] = {
+    ConnectionError: "connection error",
+    ConnectTimeout: "connection timeout",
+    InvalidSchema: "malformed url",
+    IOError: "connection error",
+    MissingSchema: "malformed url",
+    ReadTimeout: "connection timeout",
+    SSLError: "SSL error",
+    TooManyRedirects: "too many redirects",
 }
 
 url_re: Pattern[str] = re.compile(r"^(https?:)?//[^/]+\.[a-z]+/.*$", re.IGNORECASE)
@@ -205,29 +216,18 @@ def retrieve_url_into_file(url: str, file_path: str) -> int:
         raise RuntimeError(
             f"Could not open output file '{file_path}' for writing: {exception}"
         ) from exception
-    except (InvalidSchema, MissingSchema) as exception:
+    except (
+        ConnectionError,
+        ConnectTimeout,
+        InvalidSchema,
+        IOError,
+        MissingSchema,
+        ReadTimeout,
+        SSLError,
+        TooManyRedirects,
+    ) as exception:
         raise RuntimeError(
-            f"Could not load '{url}' due to malformed url: {exception}"
-        ) from exception
-    except SSLError as exception:
-        # An error in the SSL handshake, or an expired cert.
-        raise RuntimeError(
-            f"Could not load resource at '{url}' due to SSL error: {exception}"
-        ) from exception
-    except TooManyRedirects as exception:
-        # The remote host put the client through too many redirects.
-        raise RuntimeError(
-            f"Could not load resource at '{url}' due to too many redirects: {exception}"
-        ) from exception
-    except (ConnectTimeout, ReadTimeout) as exception:
-        # The connection timed out.
-        raise RuntimeError(
-            f"Could not load resource at '{url}' due to connection timeout: {exception}"
-        ) from exception
-    except (ConnectionError, IOError) as exception:
-        # There was a generic connection error.
-        raise RuntimeError(
-            f"Could not load resource at '{url}' due to connection error: {exception}"
+            f"Could not load '{url}' due to {req_excpt_msgs[type(exception)]}: {exception}"
         ) from exception
     finally:
         if isinstance(file_handle, io.IOBase):
