@@ -12,6 +12,11 @@ import sys
 import tempfile
 import io
 
+from re import Pattern
+from typing import BinaryIO
+
+from bs4 import Tag, NavigableString
+from requests import Response
 from requests.exceptions import (
     ConnectionError,
     ConnectTimeout,
@@ -22,9 +27,86 @@ from requests.exceptions import (
     TooManyRedirects,
 )
 
+status_code_msgs: dict[int, str] = {
+    100: "Continue",
+    101: "Switching Protocols",
+    102: "Processing",
+    103: "Early Hints",
+    200: "OK",
+    201: "Created",
+    202: "Accepted",
+    203: "Non-Authoritative Information",
+    204: "No Content",
+    205: "Reset Content",
+    206: "Partial Content",
+    207: "Multi-Status",
+    208: "Already Reported",
+    226: "IM Used",
+    300: "Multiple Choices",
+    301: "Moved Permanently",
+    302: "Found",
+    303: "See Other",
+    304: "Not Modified",
+    305: "Use Proxy",
+    307: "Temporary Redirect",
+    308: "Permanent Redirect",
+    400: "Bad Request",
+    401: "Unauthorized",
+    402: "Payment Required",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    406: "Not Acceptable",
+    407: "Proxy Authentication Required",
+    408: "Request Timeout",
+    409: "Conflict",
+    410: "Gone",
+    411: "Length Required",
+    412: "Precondition Failed",
+    413: "Payload Too Large",
+    414: "Request-URI Too Long",
+    415: "Unsupported Media Type",
+    416: "Request Range Not Satisfiable",
+    417: "Expectation Failed",
+    418: "I’m a teapot",
+    420: "Enhance Your Calm",
+    421: "Misdirected Request",
+    422: "Unprocessable Entity",
+    423: "Locked",
+    424: "Failed Dependency",
+    425: "Too Early",
+    426: "Upgrade Required",
+    428: "Precondition Required",
+    429: "Too Many Requests",
+    431: "Request Header Fields Too Large",
+    444: "No Response",
+    450: "Blocked by Windows Parental Controls",
+    451: "Unavailable For Legal Reasons",
+    497: "HTTP Request Sent to HTTPS Port",
+    498: "Token expired/invalid",
+    499: "Client Closed Request",
+    500: "Internal Server Error",
+    501: "Not Implemented",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+    506: "Variant Also Negotiates",
+    507: "Insufficient Storage",
+    508: "Loop Detected",
+    509: "Bandwidth Limit Exceeded",
+    510: "Not Extended",
+    511: "Network Authentication Required",
+    521: "Web Server Is Down",
+    522: "Connection Timed Out",
+    523: "Origin Is Unreachable",
+    525: "SSL Handshake Failed",
+    530: "Site Frozen",
+    599: "Network Connect Timeout Error",
+}
 
-url_re = re.compile(r"^(https?:)?//[^/]+\.[a-z]+/.*$", re.IGNORECASE)
-schema_re = re.compile("^https?:", re.IGNORECASE)
+url_re: Pattern[str] = re.compile(r"^(https?:)?//[^/]+\.[a-z]+/.*$", re.IGNORECASE)
+schema_re: Pattern[str] = re.compile("^https?:", re.IGNORECASE)
+abs_path_re: Pattern[str] = re.compile(r"^/.*/[^/]\+$")
 
 url_to_scheme = lambda url: url.split(":", 1)[0] + ":"
 is_url = lambda url: url_re.match(url)
@@ -32,15 +114,18 @@ is_absolute_url = lambda url: schema_re.match(url)
 is_scheme_relative_url = lambda strval: strval.startswith("//")
 
 
-def main():
-    file_path = filename_from_args(sys.argv)
+def main() -> None:
+    file_path: str = filename_from_args(sys.argv)
     file_name = mktmpd_with_file_and_chdir(file_path)
 
     with open(file_name) as fh:
         html = "".join(fh.readlines())
         soup = bs4.BeautifulSoup(markup=html, features="lxml")
 
-    title_text = soup.find("title").text.replace("/", "\\")
+    title_tag: Tag | NavigableString | None = soup.find("title")
+    if not isinstance(title_tag, Tag):
+        raise RuntimeError("Failed to find <title> tag")
+    title_text = title_tag.text.replace("/", "\\")
     files_dir_name = title_text + "_files"
     final_html_file_name = title_text + ".html"
     os.mkdir(files_dir_name)
@@ -61,7 +146,7 @@ def main():
         fh.write(str(soup))
 
 
-def fix_url(url):
+def fix_url(url: str) -> str:
     if not is_url(url):
         raise RuntimeError(f"Invalid url: '{url}'")
     elif is_scheme_relative_url(url):
@@ -72,41 +157,48 @@ def fix_url(url):
         raise RuntimeError(f"Could not resolve relative url '{url}'")
 
 
-def filename_from_args(argv):
-    if len(sys.argv) == 1:
+def filename_from_args(argv: list[str]) -> str:
+    if len(argv) == 1:
         print(
             "Please specify a file to convert to a Web Page, Complete on the commandline."
         )
         exit(1)
-    elif len(sys.argv) > 2:
+    elif len(argv) > 2:
         print("Please specify just one file to convert to a Web Page, Complete.")
         exit(1)
-    file_name = sys.argv[1]
+    file_name = argv[1]
     if not os.path.exists(file_name):
         print(f"The file '{file_name}' does not exist.")
         exit(1)
     return os.path.abspath(file_name)
 
 
-def mktmpd_with_file_and_chdir(old_file_path):
-    tempdir = tempfile.mkdtemp()
+def mktmpd_with_file_and_chdir(old_file_path: str) -> str:
+    if not isinstance(old_file_path, str) or not abs_path_re.match(old_file_path):
+        raise ValueError(
+            f"Argument old_file_path was an absolute path; got '{old_file_path}' instead."
+        )
+    tempdir: str = tempfile.mkdtemp()
     os.chdir(tempdir)
-    _, file_name = os.path.split(old_file_path)
-    new_file_path = os.path.join(tempdir, file_name)
+    file_name: str = os.path.split(old_file_path)[1]
+    new_file_path: str = os.path.join(tempdir, file_name)
     shutil.copy(old_file_path, new_file_path)
     return file_name
 
 
-def retrieve_url_into_file(url, file_path):
-    file_handle = None
+def retrieve_url_into_file(url: str, file_path: str) -> int:
+    global status_code_msgs
+    file_handle: None | BinaryIO = None
     try:
-        bytes_output_count = 0
+        bytes_output_count: int = 0
         file_handle = open(file_path, "wb")
-        http_response = requests.get(url, timeout=10)
+        http_response: Response = requests.get(url, timeout=10)
         if http_response.status_code != 200:
-            raise RuntimeError(
-                f"Request not successful: got HTTP status code {http_response.status_code}."
-            )
+            message: str = f"HTTP status {http_response.status_code}"
+            if http_response.status_code in status_code_msgs:
+                message += f" {status_code_msgs[http_response.status_code]}"
+            raise RuntimeError(f"Request not successful: got {message}")
+        chunk: bytes
         for chunk in http_response.iter_content(chunk_size=1024):
             bytes_output_count += file_handle.write(chunk)
     except OSError as exception:
@@ -143,12 +235,14 @@ def retrieve_url_into_file(url, file_path):
     return bytes_output_count
 
 
-def url_to_permuted_filename(url):
+def url_to_permuted_filename(url: str) -> str:
     if not url_re.match(url):
         raise RuntimeError(f"string '{url}' does not match the pattern for a url")
-    _, file_name_w_suffix = url.rsplit("/", 1)
-    file_name, type_suffix = file_name_w_suffix.rsplit(".")
-    random_suffix = hex(random.randint(4096, 65535)).removeprefix("0x")
+    file_name_w_suffix: str = url.rsplit("/", 1)[1]
+    file_name: str
+    type_suffix: str
+    file_name, type_suffix = file_name_w_suffix.rsplit(".", 1)
+    random_suffix: str = hex(random.randint(4096, 65535)).removeprefix("0x")
     return file_name + "_" + random_suffix + "." + type_suffix
 
 
