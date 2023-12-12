@@ -10,14 +10,27 @@ import requests.exceptions
 import shutil
 import sys
 import tempfile
+import io
+
+from requests.exceptions import (
+    ConnectionError,
+    ConnectTimeout,
+    InvalidSchema,
+    MissingSchema,
+    ReadTimeout,
+    SSLError,
+    TooManyRedirects,
+)
 
 
 url_re = re.compile(r"^(https?:)?//[^/]+\.[a-z]+/.*$", re.IGNORECASE)
 schema_re = re.compile("^https?:", re.IGNORECASE)
 
 url_to_scheme = lambda url: url.split(":", 1)[0] + ":"
+is_url = lambda url: url_re.match(url)
 is_absolute_url = lambda url: schema_re.match(url)
 is_scheme_relative_url = lambda strval: strval.startswith("//")
+
 
 def main():
     file_path = filename_from_args(sys.argv)
@@ -28,17 +41,35 @@ def main():
         soup = bs4.BeautifulSoup(markup=html, features="lxml")
 
     title_text = soup.find("title").text.replace("/", "\\")
-    assoc_files_dir = title_text + "_files"
-    final_html_file = title_text + ".html"
-    os.mkdir(assoc_files_dir)
+    files_dir_name = title_text + "_files"
+    final_html_file_name = title_text + ".html"
+    os.mkdir(files_dir_name)
 
     img_tags = soup.find_all("img", src=True)
     script_tags = soup.find_all("script", src=True)
     link_tags = soup.find_all("link", rel="stylesheet", href=True)
     tags = list(img_tags) + list(script_tags) + list(link_tags)
 
-    # for tag in tags:
-    #    url = tag.href if tag.name == "link" else tag.src
+    for tag in tags:
+        attrname = "href" if tag.name == "link" else "src"
+        url = getattr(tag, attrname)
+        resource_file_path = os.path.join(files_dir_name, url_to_permuted_filename(url))
+        retrieve_url_into_file(url, resource_file_path)
+        setattr(tag, attrname, resource_file_path)
+
+    with open(final_html_file_name, "w") as fh:
+        fh.write(str(soup))
+
+
+def fix_url(url):
+    if not is_url(url):
+        raise RuntimeError(f"Invalid url: '{url}'")
+    elif is_scheme_relative_url(url):
+        return "https:" + url
+    elif is_absolute_url(url):
+        return url
+    else:
+        raise RuntimeError(f"Could not resolve relative url '{url}'")
 
 
 def filename_from_args(argv):
@@ -74,42 +105,40 @@ def retrieve_url_into_file(url, file_path):
         http_response = requests.get(url, timeout=10)
         if http_response.status_code != 200:
             raise RuntimeError(
-                f"Request not successful: got HTTP status code {http_response.status_code}.\n"
+                f"Request not successful: got HTTP status code {http_response.status_code}."
             )
         for chunk in http_response.iter_content(chunk_size=1024):
             bytes_output_count += file_handle.write(chunk)
     except OSError as exception:
         raise RuntimeError(
-            f"Could not open output file '{file_path}' for writing:\n" + str(exception)
+            f"Could not open output file '{file_path}' for writing: {exception}"
         ) from exception
-    except requests.exceptions.SSLError as exception:
+    except (InvalidSchema, MissingSchema) as exception:
+        raise RuntimeError(
+            f"Could not load '{url}' due to malformed url: {exception}"
+        ) from exception
+    except SSLError as exception:
         # An error in the SSL handshake, or an expired cert.
         raise RuntimeError(
-            f"Could not load resource at '{url}' due to SSL error:\n" + str(exception)
+            f"Could not load resource at '{url}' due to SSL error: {exception}"
         ) from exception
-    except requests.exceptions.TooManyRedirects as exception:
+    except TooManyRedirects as exception:
         # The remote host put the client through too many redirects.
         raise RuntimeError(
-            f"Could not load resource at '{url}' due to too many redirects:\n"
-            + str(exception)
+            f"Could not load resource at '{url}' due to too many redirects: {exception}"
         ) from exception
-    except (
-        requests.exceptions.ConnectTimeout,
-        requests.exceptions.ReadTimeout,
-    ) as exception:
+    except (ConnectTimeout, ReadTimeout) as exception:
         # The connection timed out.
         raise RuntimeError(
-            f"Could not load resource at '{url}' due to connection timeout:\n"
-            + str(exception)
+            f"Could not load resource at '{url}' due to connection timeout: {exception}"
         ) from exception
-    except (requests.exceptions.ConnectionError, IOError) as exception:
+    except (ConnectionError, IOError) as exception:
         # There was a generic connection error.
         raise RuntimeError(
-            f"Could not load resource at '{url}' due to connection error:\n"
-            + str(exception)
+            f"Could not load resource at '{url}' due to connection error: {exception}"
         ) from exception
     finally:
-        if file_handle is not None:
+        if isinstance(file_handle, io.IOBase):
             file_handle.close()
     return bytes_output_count
 
@@ -117,11 +146,10 @@ def retrieve_url_into_file(url, file_path):
 def url_to_permuted_filename(url):
     if not url_re.match(url):
         raise RuntimeError(f"string '{url}' does not match the pattern for a url")
-    return (
-        url.rsplit("/", 1)[1]
-        + "_"
-        + hex(random.randint(4096, 65535)).removeprefix("0x")
-    )
+    _, file_name_w_suffix = url.rsplit("/", 1)
+    file_name, type_suffix = file_name_w_suffix.rsplit(".")
+    random_suffix = hex(random.randint(4096, 65535)).removeprefix("0x")
+    return file_name + "_" + random_suffix + "." + type_suffix
 
 
 if __name__ == "__main__":
