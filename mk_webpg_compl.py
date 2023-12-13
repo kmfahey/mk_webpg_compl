@@ -10,10 +10,9 @@ import requests.exceptions
 import shutil
 import sys
 import tempfile
-import io
 
 from re import Pattern
-from typing import BinaryIO, Dict, Type
+from typing import BinaryIO, Type
 
 from bs4 import Tag, NavigableString
 from requests import Response
@@ -28,80 +27,80 @@ from requests.exceptions import (
 )
 
 status_code_msgs: dict[int, str] = {
-    100: "Continue",
-    101: "Switching Protocols",
-    102: "Processing",
-    103: "Early Hints",
-    200: "OK",
-    201: "Created",
-    202: "Accepted",
-    203: "Non-Authoritative Information",
-    204: "No Content",
-    205: "Reset Content",
-    206: "Partial Content",
-    207: "Multi-Status",
-    208: "Already Reported",
-    226: "IM Used",
-    300: "Multiple Choices",
-    301: "Moved Permanently",
-    302: "Found",
-    303: "See Other",
-    304: "Not Modified",
-    305: "Use Proxy",
-    307: "Temporary Redirect",
-    308: "Permanent Redirect",
-    400: "Bad Request",
-    401: "Unauthorized",
-    402: "Payment Required",
-    403: "Forbidden",
-    404: "Not Found",
-    405: "Method Not Allowed",
-    406: "Not Acceptable",
-    407: "Proxy Authentication Required",
-    408: "Request Timeout",
-    409: "Conflict",
-    410: "Gone",
-    411: "Length Required",
-    412: "Precondition Failed",
-    413: "Payload Too Large",
-    414: "Request-URI Too Long",
-    415: "Unsupported Media Type",
-    416: "Request Range Not Satisfiable",
-    417: "Expectation Failed",
-    418: "I’m a teapot",
-    420: "Enhance Your Calm",
-    421: "Misdirected Request",
-    422: "Unprocessable Entity",
-    423: "Locked",
-    424: "Failed Dependency",
-    425: "Too Early",
-    426: "Upgrade Required",
-    428: "Precondition Required",
-    429: "Too Many Requests",
-    431: "Request Header Fields Too Large",
-    444: "No Response",
-    450: "Blocked by Windows Parental Controls",
-    451: "Unavailable For Legal Reasons",
-    497: "HTTP Request Sent to HTTPS Port",
-    498: "Token expired/invalid",
-    499: "Client Closed Request",
-    500: "Internal Server Error",
-    501: "Not Implemented",
-    502: "Bad Gateway",
-    503: "Service Unavailable",
-    504: "Gateway Timeout",
-    506: "Variant Also Negotiates",
-    507: "Insufficient Storage",
-    508: "Loop Detected",
-    509: "Bandwidth Limit Exceeded",
-    510: "Not Extended",
-    511: "Network Authentication Required",
-    521: "Web Server Is Down",
-    522: "Connection Timed Out",
-    523: "Origin Is Unreachable",
-    525: "SSL Handshake Failed",
-    530: "Site Frozen",
-    599: "Network Connect Timeout Error",
+    100: "100 Continue",
+    101: "101 Switching Protocols",
+    102: "102 Processing",
+    103: "103 Early Hints",
+    200: "200 OK",
+    201: "201 Created",
+    202: "202 Accepted",
+    203: "203 Non-Authoritative Information",
+    204: "204 No Content",
+    205: "205 Reset Content",
+    206: "206 Partial Content",
+    207: "207 Multi-Status",
+    208: "208 Already Reported",
+    226: "226 IM Used",
+    300: "300 Multiple Choices",
+    301: "301 Moved Permanently",
+    302: "302 Found",
+    303: "303 See Other",
+    304: "304 Not Modified",
+    305: "305 Use Proxy",
+    307: "307 Temporary Redirect",
+    308: "308 Permanent Redirect",
+    400: "400 Bad Request",
+    401: "401 Unauthorized",
+    402: "402 Payment Required",
+    403: "403 Forbidden",
+    404: "404 Not Found",
+    405: "405 Method Not Allowed",
+    406: "406 Not Acceptable",
+    407: "407 Proxy Authentication Required",
+    408: "408 Request Timeout",
+    409: "409 Conflict",
+    410: "410 Gone",
+    411: "411 Length Required",
+    412: "412 Precondition Failed",
+    413: "413 Payload Too Large",
+    414: "414 Request-URI Too Long",
+    415: "415 Unsupported Media Type",
+    416: "416 Request Range Not Satisfiable",
+    417: "417 Expectation Failed",
+    418: "418 I’m a teapot",
+    420: "420 Enhance Your Calm",
+    421: "421 Misdirected Request",
+    422: "422 Unprocessable Entity",
+    423: "423 Locked",
+    424: "424 Failed Dependency",
+    425: "425 Too Early",
+    426: "426 Upgrade Required",
+    428: "428 Precondition Required",
+    429: "429 Too Many Requests",
+    431: "431 Request Header Fields Too Large",
+    444: "444 No Response",
+    450: "450 Blocked by Windows Parental Controls",
+    451: "451 Unavailable For Legal Reasons",
+    497: "497 HTTP Request Sent to HTTPS Port",
+    498: "498 Token expired/invalid",
+    499: "499 Client Closed Request",
+    500: "500 Internal Server Error",
+    501: "501 Not Implemented",
+    502: "502 Bad Gateway",
+    503: "503 Service Unavailable",
+    504: "504 Gateway Timeout",
+    506: "506 Variant Also Negotiates",
+    507: "507 Insufficient Storage",
+    508: "508 Loop Detected",
+    509: "509 Bandwidth Limit Exceeded",
+    510: "510 Not Extended",
+    511: "511 Network Authentication Required",
+    521: "521 Web Server Is Down",
+    522: "522 Connection Timed Out",
+    523: "523 Origin Is Unreachable",
+    525: "525 SSL Handshake Failed",
+    530: "530 Site Frozen",
+    599: "599 Network Connect Timeout Error",
 }
 
 req_excpt_msgs: dict[Type[OSError], str] = {
@@ -199,39 +198,28 @@ def mktmpd_with_file_and_chdir(old_file_path: str) -> str:
 
 def retrieve_url_into_file(url: str, file_path: str) -> int:
     global status_code_msgs
-    file_handle: None | BinaryIO = None
+    bytes_output_count: int = 0
+
     try:
-        bytes_output_count: int = 0
-        file_handle = open(file_path, "wb")
         http_response: Response = requests.get(url, timeout=10)
-        if http_response.status_code != 200:
-            message: str = f"HTTP status {http_response.status_code}"
-            if http_response.status_code in status_code_msgs:
-                message += f" {status_code_msgs[http_response.status_code]}"
-            raise RuntimeError(f"Request not successful: got {message}")
+        assert http_response.status_code == 200, status_code_msgs[http_response.status_code]
+        file_handle: BinaryIO = open(file_path, "wb")
         chunk: bytes
         for chunk in http_response.iter_content(chunk_size=1024):
             bytes_output_count += file_handle.write(chunk)
+    except AssertionError as exception:
+        raise RuntimeError(f"Request not successful: got status {exception}")
+    except (ConnectionError, ConnectTimeout, InvalidSchema, MissingSchema, ReadTimeout, SSLError,
+            TooManyRedirects) as exception:
+        source_msg = f" due to {req_excpt_msgs[type(exception)]}" if type(exception) in req_excpt_msgs else ""
+        raise RuntimeError(f"Could not load '{url}'{source_msg}: {exception}") from exception
+    # All the above exceptions are subclass OSError, but so are the I/O errors
+    # that writing to a file can throw, so this block comes second
     except OSError as exception:
-        raise RuntimeError(
-            f"Could not open output file '{file_path}' for writing: {exception}"
-        ) from exception
-    except (
-        ConnectionError,
-        ConnectTimeout,
-        InvalidSchema,
-        IOError,
-        MissingSchema,
-        ReadTimeout,
-        SSLError,
-        TooManyRedirects,
-    ) as exception:
-        raise RuntimeError(
-            f"Could not load '{url}' due to {req_excpt_msgs[type(exception)]}: {exception}"
-        ) from exception
+        raise RuntimeError(f"Could not write to file '{file_path}': {exception}") from exception
     finally:
-        if isinstance(file_handle, io.IOBase):
-            file_handle.close()
+        file_handle.close()
+
     return bytes_output_count
 
 
